@@ -20,6 +20,10 @@ except ImportError:
 def unescape_json_response(s):
     return html_unescape(s.replace('&#92;', r'\\').replace('&quot;', r'\"')).replace(u"\xa0", ' ')
 
+js_callback_regex = re.compile(r"^[a-zA-Z][^(]*\((.*)\);?$")
+def unescape_js_callback_response(s):
+    return js_callback_regex.sub(r"[\1]", s.strip().replace("'", '"'))
+
 
 from smart_qq_bot.logger import logger
 from smart_qq_bot.config import QR_CODE_PATH, SMART_QQ_REFER
@@ -303,8 +307,7 @@ class QQBot(object):
             self, qr_validation_url, appid, star_time,
             mibao_css, js_ver, sign, init_url, qrsig
     ):
-        redirect_url = None
-        login_result = self.client.load(
+        return self.client.load(
             qr_validation_url.format(
                 appid,
                 date_to_millis(datetime.datetime.utcnow()) - star_time,
@@ -313,14 +316,10 @@ class QQBot(object):
                 sign,
                 self._hash_for_qrsig(qrsig)
             ),
-            refer=init_url, json=False
+            refer=init_url,
+            unescape=unescape_js_callback_response,
+            callback=lambda args: (int(args[0]), args[2]) # status, u1, redirect_url, u2, statusText, accountName, *args
         )
-        ret_code = int(find_first_result(login_result, r"\d+", None))
-        redirect_info = re.findall(r"(http.*?)\'", login_result)
-        if redirect_info:
-            logger.debug("redirect_info match is: %s" % redirect_info)
-            redirect_url = redirect_info[0]
-        return ret_code, redirect_url
 
     def login(self, no_gui=False):
         while True:
