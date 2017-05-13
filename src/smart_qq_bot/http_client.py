@@ -63,10 +63,11 @@ class HttpClient(object):
     def get_timestamp():
         return str(int(time.time()*1000))
 
-    def load(self, url, data=None, refer=None, unescape=None, json=True, callback=None, retries=5):
+    def load(self, url, data=None, refer=None, parser=json_loads, validator=None, retries=5):
         while True:
             try:
                 if data:
+                    logger.debug("POST {} with data {}".format(url, data))
                     resp = self.session.post(
                         url,
                         data,
@@ -74,6 +75,7 @@ class HttpClient(object):
                         verify=SSL_VERIFY,
                     )
                 else:
+                    logger.debug("GET {}".format(url))
                     resp = self.session.get(
                         url,
                         headers=self._get_headers({'Referer': refer or SMART_QQ_REFER}),
@@ -81,48 +83,37 @@ class HttpClient(object):
                     )
                 self._cookies.save(COOKIE_FILE, ignore_discard=True, ignore_expires=True)
                 resp = resp.text
-                logger.debug("{} response: {}".format(url, resp))
+                logger.debug("response: {}".format(resp))
 
-                if unescape:
-                    resp = unescape(resp)
-                if json:
-                    resp = json_loads(resp)
+                if parser:
+                    resp = parser(resp)
+                if validator:
+                    validator(resp)
+                return resp
             except requests.exceptions.SSLError:
                 logger.exception("SSL连接验证失败，请检查您所在的网络环境。如果需要禁用SSL验证，请修改config.py中的SSL_VERIFY为False")
                 raise
-            except:
+            except Exception as e:
+                logger.exception(e)
                 retries -= 1
                 if retries == 0:
                     raise
 
-                try:
-                    raise
-                except (excps.ConnectTimeout, excps.HTTPError):
-                    logger.exception("Failed to send request to `{0}`".format(error_msg))
-                except Exception as e:
-                    logger.exception(e)
-
-                logger.error("request failed, retrying in 2 seconds")
-                time.sleep(2)
-            else:
-                if callback:
-                    resp = callback(resp)
-                return resp
+            logger.error("request failed, retrying in 2 seconds")
+            time.sleep(2)
 
     def load_result(self, url, *args, **kwargs):
-        callback = "callback" in kwargs and callback or None
-        def get_result(result):
-            if 'retcode' in result:
-                assert result['retcode'] == 0
-            elif 'errCode' in result:
-                assert result['errCode'] == 0
-            result = result['result']
-            if callback:
-                result = callback(result)
-            return result
-        kwargs["callback"] = get_result
-        kwargs["json"] = True
-        return self.load(url, *args, **kwargs)
+        validator = kwargs["validator"] if "validator" in kwargs else None
+        def result_validator(response):
+            assert 'retcode' in response and response['retcode'] == 0 \
+                or 'errCode' in response and response['errCode'] == 0 \
+                or 'ec' in response and response['ec'] == 0, repr(response)
+            assert 'result' in response, repr(response)
+            if validator:
+                validator(response['result'])
+        kwargs["validator"] = result_validator
+        response = self.load(url, *args, **kwargs)
+        return response['result']
 
     def get_cookie(self, key):
         for c in self._cookies:

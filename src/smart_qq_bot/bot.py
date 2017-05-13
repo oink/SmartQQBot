@@ -17,12 +17,12 @@ except ImportError:
     def html_unescape(s):
         return html_parser.unescape(s)
 
-def unescape_json_response(s):
-    return html_unescape(s.replace('&#92;', r'\\').replace('&quot;', r'\"')).replace(u"\xa0", ' ')
+def htmlencoded_json_parser(s):
+    return json.loads(html_unescape(s.replace('&#92;', r'\\').replace('&quot;', r'\"')).replace(u"\xa0", ' '))
 
 js_callback_regex = re.compile(r"^[a-zA-Z][^(]*\((.*)\);?$")
-def unescape_js_callback_response(s):
-    return js_callback_regex.sub(r"[\1]", s.strip().replace("'", '"'))
+def js_callback_parser(s):
+    return json.loads(js_callback_regex.sub(r"[\1]", s.strip().replace("'", '"')))
 
 
 from smart_qq_bot.logger import logger
@@ -178,7 +178,7 @@ class QQBot(object):
         self.client.load_cookie()
         self.ptwebqq = self.client.get_cookie('ptwebqq')
 
-        result = self.client.load_result(
+        result = self.client.load(
             'http://d1.web2.qq.com/channel/login2',
             {
                 'r': '{{"ptwebqq":"{0}","clientid":{1},"psessionid":"{2}","status":"online"}}'.format(
@@ -189,8 +189,10 @@ class QQBot(object):
             },
             SMART_QQ_REFER
         )
+        assert result['retcode'] == 0
+        result = result['result']
 
-        result2 = self.client.load_result(
+        result2 = self.client.load(
             "http://s.web2.qq.com/api/getvfwebqq?ptwebqq={0}&clientid={1}&psessionid={2}&t={3}".format(
                 self.ptwebqq,
                 self.client_id,
@@ -198,13 +200,14 @@ class QQBot(object):
                 self.client.get_timestamp()
             )
         )
+        assert result2['retcode'] == 0
+        result2 = result2['result']
 
         self.psessionid = result['psessionid']
         self.account = result['uin']
         self.vfwebqq = result2['vfwebqq']
 
         logger.info("Login by cookie succeed. account: %s" % self.account)
-        return True
 
     def _login_by_qrcode(self, no_gui):
         logger.info("RUNTIMELOG Trying to login by qrcode.")
@@ -224,7 +227,7 @@ class QQBot(object):
                    "&f_url=loginerroralert&strong_login=1" \
                    "&login_state=10&t=20131024001"
         html = self.client.load(
-            init_url, json=False
+            init_url, parser=None
         )
         appid = find_first_result(
             html,
@@ -293,7 +296,7 @@ class QQBot(object):
         elif redirect_url is None:
             raise QRLoginFailed(login_failed_tips)
         else:
-            html = self.client.load(redirect_url, json=False)
+            html = self.client.load(redirect_url, parser=None)
             logger.debug("QR Login redirect_url response: %s" % html)
             return True
 
@@ -307,7 +310,7 @@ class QQBot(object):
             self, qr_validation_url, appid, star_time,
             mibao_css, js_ver, sign, init_url, qrsig
     ):
-        return self.client.load(
+        (status, u1, redirect_url, u2, statusText, accountName) = self.client.load(
             qr_validation_url.format(
                 appid,
                 date_to_millis(datetime.datetime.utcnow()) - star_time,
@@ -317,27 +320,22 @@ class QQBot(object):
                 self._hash_for_qrsig(qrsig)
             ),
             refer=init_url,
-            unescape=unescape_js_callback_response,
-            callback=lambda args: (int(args[0]), args[2]) # status, u1, redirect_url, u2, statusText, accountName, *args
-        )
+            parser=js_callback_parser,
+        )[0:6]
+        return (int(status), redirect_url)
 
     def login(self, no_gui=False):
-        while True:
+        def success(f):
             try:
-                self._login_by_cookie()
-                break
+                f()
+                return True
             except Exception as e:
                 logger.exception(e)
-                while True:
-                    try:
-                        self._login_by_qrcode(no_gui)
-                    except Exception as e:
-                        logger.exception(e)
-                        time.sleep(4)
-                    else:
-                        break
-            else:
-                break
+                return False
+
+        while not success(lambda: self._login_by_cookie()):
+            while not success(lambda: self._login_by_qrcode(no_gui)):
+                time.sleep(4)
 
         user_info = self.get_self_info()
         self.query_friends_accounts()
@@ -375,7 +373,7 @@ class QQBot(object):
                     )
                 },
                 SMART_QQ_REFER,
-                unescape=lambda result: result.replace(r"\u0026lt;", "<").replace(r"\u0026gt;", ">")
+                parser=lambda resp: json.loads(resp.replace(r"\u0026lt;", "<").replace(r"\u0026gt;", ">"))
             )
         except Exception as e:
             logger.exception(e)
@@ -413,7 +411,7 @@ class QQBot(object):
                     'http://qun.qq.com/cgi-bin/qun_mgr/get_friend_list',
                     data={'bkn': self.bkn},
                     refer='http://qun.qq.com/member.html',
-                    unescape=unescape_json_response,
+                    parser=htmlencoded_json_parser,
                 )
             qq_list = []
             for member_list in friend_groups.values():
@@ -636,13 +634,12 @@ class QQBot(object):
         if self._get_group_list:
             rsp_json = self._get_group_list
         else:
-            def check_ec(rsp_json):
+            def ec_validator(rsp_json):
                 assert rsp_json['ec'] == 0, "get_group_list code unknown"
-                return rsp_json
 
             url = "http://qun.qq.com/cgi-bin/qun_mgr/get_group_list"
             data = {'bkn': self.bkn}
-            rsp_json = self.client.load(url, data=data, refer='http://qun.qq.com/member.html', unescape=unescape_json_response, callback=check_ec)
+            rsp_json = self.client.load(url, data=data, refer='http://qun.qq.com/member.html', parser=htmlencoded_json_parser, validator=ec_validator)
 
             self._get_group_list = rsp_json
 
@@ -753,13 +750,12 @@ class QQBot(object):
             logger.debug("get_group_member_info_list 输入为0，返回 None")
             return
         try:
-            def check_retcode(rsp_json):
+            def retcode_validator(rsp_json):
                 assert rsp_json["retcode"] == 0 or rsp_json["retcode"] == 6, "group_code error."
-                return rsp_json
 
             url = "http://s.web2.qq.com/api/get_group_info_ext2?gcode=%s&vfwebqq=%s&t=%s" % (
                 group_code, self.vfwebqq, int(time.time() * 100))
-            rsp_json = self.client.load(url, callback=check_retcode)
+            rsp_json = self.client.load(url, validator=retcode_validator)
             retcode = rsp_json["retcode"]
             if retcode == 0:
                 result = rsp_json["result"]
@@ -836,10 +832,10 @@ class QQBot(object):
             'gc':   str(group_id),
             'u':   self._self_info.get('uin'),
         }
-        def check_ec(rsp_json):
+        def ec_validator(rsp_json):
             assert rsp_json['ec'] == 0, "search_group_members code unknown"
             return rsp_json
-        rsp_json = self.client.load(url, data=data, refer='http://qinfo.clt.qq.com/member.html', unescape=unescape_json_response, callback=check_ec)
+        rsp_json = self.client.load(url, data=data, refer='http://qinfo.clt.qq.com/member.html', parser=htmlencoded_json_parser, validator=ec_validator)
         return rsp_json.get('mems', [])
 
     def get_discuss_info(self, did):
@@ -908,7 +904,7 @@ class QQBot(object):
         content = self.injection_escape_regex.sub(r'\1_\2\3', content)
         return self._quote(self._quote(content))
 
-    def _check_msg_result(self, rsp_json):
+    def _msg_result_validator(self, rsp_json):
         assert 'errCode' in rsp_json, 'RUNTIMELOG friend chat missing errCode'
         assert rsp_json['errCode'] == 0, "reply pmchat error" + str(rsp_json['errCode'])
         return rsp_json
@@ -927,7 +923,7 @@ class QQBot(object):
                 'clientid': self.client_id,
                 'psessionid': self.psessionid
             }
-            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, callback=self._check_msg_result, retries=5)
+            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, validator=self._msg_result_validator, retries=5)
             logger.info("RUNTIMELOG send_qun_msg: Reply '{}' successfully.".format(reply_content))
             return rsp_json
         except Exception, e:
@@ -948,7 +944,7 @@ class QQBot(object):
                 'clientid': self.client_id,
                 'psessionid': self.psessionid
             }
-            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, callback=self._check_msg_result, retries=5)
+            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, validator=self._msg_result_validator, retries=5)
             logger.info("RUNTIMELOG Reply successfully.")
             return rsp_json
         except Exception, e:
@@ -970,7 +966,7 @@ class QQBot(object):
                 'clientid': self.client_id,
                 'psessionid': self.psessionid
             }
-            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, callback=self._check_msg_result, retries=5)
+            rsp_json = self.client.load(req_url, data, SMART_QQ_REFER, validator=self._msg_result_validator, retries=5)
             logger.info("send_discuss_msg: Reply '{}' successfully.".format(reply_content))
             return rsp_json
         except:
