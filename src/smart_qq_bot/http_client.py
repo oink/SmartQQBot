@@ -100,17 +100,15 @@ class HttpClient(object):
             logger.error("request failed, retrying in 2 seconds")
             time.sleep(2)
 
-    def load_result(self, url, *args, **kwargs):
+    def load_result(self, url, data=None, status_key='retcode', *args, **kwargs):
         validator = kwargs["validator"] if "validator" in kwargs else None
         def result_validator(response):
-            assert 'retcode' in response and response['retcode'] == 0 \
-                or 'errCode' in response and response['errCode'] == 0 \
-                or 'ec' in response and response['ec'] == 0, repr(response)
+            assert status_key in response and response[status_key] == 0, 'invalid status: {}'.format(repr(response))
             assert 'result' in response, repr(response)
             if validator:
                 validator(response['result'])
         kwargs["validator"] = result_validator
-        response = self.load(url, *args, **kwargs)
+        response = self.load(url, data=data, *args, **kwargs)
         return response['result']
 
     def get_cookie(self, key):
