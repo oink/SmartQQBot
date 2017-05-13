@@ -412,6 +412,7 @@ class QQBot(object):
                     data={'bkn': self.bkn},
                     refer='http://qun.qq.com/member.html',
                     parser=htmlencoded_json_parser,
+                    status_key='ec',
                 )
             qq_list = []
             for member_list in friend_groups.values():
