@@ -175,7 +175,6 @@ class QQBot(object):
     def _login_by_cookie(self):
         logger.info("Try cookie login...")
 
-        self.client.load_cookie()
         self.ptwebqq = self.client.get_cookie('ptwebqq')
 
         result = self.client.load(
@@ -356,6 +355,10 @@ class QQBot(object):
             exit(1)
         logger.info("RUNTIMELOG QQ：{0} login successfully, Username：{1}".format(self.account, self.username))
 
+    def logout(self):
+        logger.debug("clear_cookies")
+        self.client.clear_cookies()
+
     def check_msg(self):
 
         # Pooling the message
@@ -394,15 +397,16 @@ class QQBot(object):
         else:
             self._last_pool_success = False
             if ret_code in (103, ):
-                logger.warning("Pooling received retcode: " + str(ret_code))
+                raise NeedRelogin("Pooling received retcode: " + str(ret_code))
             elif ret_code in (121,):
                 logger.warning("Pooling error with retcode %s" % ret_code)
             elif ret_code == 100006:
                 logger.error("Pooling request error, response is: %s" % ret)
-            elif ret_code == 100012:
+            elif ret_code in (100001, 100012):
                 raise NeedRelogin("Login is expired. Please relogin by qrcode")
             else:
                 logger.warning("Pooling returns unknown retcode %s" % ret_code)
+            time.sleep(2)
         return None
 
     def query_friends_accounts(self):

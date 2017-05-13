@@ -4,13 +4,13 @@ from bottle import run, get, static_file, redirect
 @get('/')
 def index():
     from smart_qq_bot.app import bot
-    tpl = '<h1>If QR Code is shown, please scan!</h1>' \
-          '<h2>Login Out Dated: {login_out_dated} </h2>' \
-          '<img src="/qr_code.jpg" alt="qr_code"/>' \
-          '<h1>click <a href="/re-login">here</a> to re-login</h1>'
-    return tpl.format(
-        login_out_dated=bot.login_out_dated
-    )
+    html = '<h1>If QR Code is shown, please scan!</h1>'
+    html += '<h2>Login Out Dated: {login_out_dated} </h2>'.format(login_out_dated=bot.login_out_dated)
+    if bot.login_out_dated:
+        html += '<img src="/qr_code.jpg" alt="qr_code"/>'
+    else:
+        html += '<h1>click <a href="/re-login">here</a> to re-login</h1>'
+    return html
 
 
 @get('/qr_code.jpg')
@@ -22,6 +22,7 @@ def qr_code():
 @get('/re-login')
 def re_login():
     from smart_qq_bot.app import bot
+    bot.logout()
     bot.login(no_gui=True)
     return redirect("/")
 

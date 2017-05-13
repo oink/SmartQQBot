@@ -9,7 +9,6 @@ import threading
 from six import PY2
 from six import iteritems
 
-from smart_qq_bot.config import COOKIE_FILE
 from smart_qq_bot.logger import logger
 from smart_qq_bot.app import bot, plugin_manager
 from smart_qq_bot.handler import MessageObserver
@@ -22,12 +21,6 @@ def patch():
     if PY2:
         reload(sys)
         sys.setdefaultencoding("utf-8")
-
-
-def clean_cookie():
-    if os.path.isfile(COOKIE_FILE):
-        os.remove(COOKIE_FILE)
-    logger.info("Cookie file removed.")
 
 
 def run_http_daemon(host="0.0.0.0", port=8888):
@@ -52,7 +45,7 @@ def main_loop(no_gui=False, new_user=False, debug=False, http=False):
     logger.info("Initializing...")
     plugin_manager.load_plugin()
     if new_user:
-        clean_cookie()
+        bot.logout()
     bot.login(no_gui)
     observer = MessageObserver(bot)
 
@@ -77,7 +70,7 @@ def main_loop(no_gui=False, new_user=False, debug=False, http=False):
         except (socket.timeout, IOError):
             logger.warning("Message pooling timeout, retrying...")
         except NeedRelogin:
-            exit(0)
+            bot.login(no_gui)
         except Exception:
             logger.exception("Exception occurs when checking msg.")
 
